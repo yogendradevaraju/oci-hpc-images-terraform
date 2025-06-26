@@ -1,0 +1,215 @@
+---
+- hosts: localhost
+  collections:
+    - oracle.oci
+  connection: localhost
+
+  pre_tasks:
+    - name: include variables
+      include_vars:
+        file: "{{ image_build_file }}"
+    - name: include variables
+      include_vars:
+        file: defaults.yml
+
+  vars:
+    options: "{{ build_options }}"
+
+  tasks:
+    - name: Image build process [ Stage 1 ]
+      block:
+        - name: Lookup image by display name
+          oci_compute_image_facts:
+            config_profile_name: "{{ access_cfg_file_account }}"
+            region:              "{{ region }}"
+            auth_type:           "{{ auth_type }}"
+            display_name:        "{{ base_image_name }}"
+            compartment_id:      "{{ compartment_ocid }}"
+          register: image_lookup
+          when: image_id is not defined
+
+        - name: Set final_image_id (either user‐provided or looked up)
+          set_fact:
+            final_image_id: >-
+              {{ image_id 
+                if (image_id is defined) 
+                else (image_lookup.images[0].id) }}
+
+        - name: Generate temporary SSH key
+          community.crypto.openssh_keypair:
+            path: /tmp/id_ssh_rsa
+
+        - name: Launch Instance
+          oci_compute_instance:
+            config_profile_name: "{{ access_cfg_file_account }}"
+            region:              "{{ region }}"
+            auth_type:           "{{ auth_type }}"
+            display_name:        "{{ image_build_name }}"
+            availability_domain: "{{ ad }}"
+            compartment_id:      "{{ compartment_ocid }}"
+            shape:               "{{ shape }}"
+            shape_config:
+              ocpus:           "{{ shape_config.ocpus }}"
+              memory_in_gbs:   "{{ shape_config.memory_in_gbs }}"
+            metadata:
+              user_data:         "{{ lookup('file','files/user_data.txt') | b64encode }}"
+              ssh_authorized_keys: "{{ lookup('file','/tmp/id_ssh_rsa.pub') }}"
+            source_details:
+              source_type:           image
+              image_id:              "{{ final_image_id}}"
+              boot_volume_size_in_gbs: "{{ boot_volume_size_in_gbs }}"
+            create_vnic_details:
+              assign_public_ip: true
+              subnet_id:        "{{ subnet_ocid }}"
+          register: instance
+
+        - name: Add new VM to ansible Inventory
+          add_host:
+            name: "{{ instance.instance.display_name }}"
+            ansible_host: "{{ instance.instance.primary_public_ip }}"
+            ansible_user: "{{ user }}"
+            ansible_private_key_file: /tmp/id_ssh_rsa
+            ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+            groups: "just_created,{{ build_groups | join(',') }}"
+
+        - name: Wait for SSH to be available
+          wait_for:
+            host:    "{{ instance.instance.primary_public_ip }}"
+            port:    22
+            delay:   10
+            timeout: 600
+            state:   started
+          register: wait_ssh
+
+      rescue:
+        - name: Terminate Instance
+          oci_compute_instance:
+            config_profile_name: "{{ access_cfg_file_account }}"
+            region:              "{{ region }}"
+            auth_type:           "{{ auth_type }}"
+            instance_id:         "{{ hostvars['localhost']['instance'].instance.id }}"
+            state:               absent
+          ignore_errors: true
+          when: hostvars['localhost']['instance'].instance.id is defined
+
+        - name: Delete SSH private key
+          ansible.builtin.file:
+            path:  /tmp/id_ssh_rsa
+            state: absent
+          when: not build_debug
+
+        - name: Delete SSH public key
+          ansible.builtin.file:
+            path:  /tmp/id_ssh_rsa.pub
+            state: absent
+          when: not build_debug
+
+- hosts: just_created
+  collections:
+    - oracle.oci
+  gather_facts: false
+  become: true
+
+  pre_tasks:
+    - name: load defaults
+      include_vars:
+        file: defaults.yml
+    - name: include variables
+      include_vars:
+        file: "{{ image_build_file }}"
+    - name: load group_vars for each selected group
+      include_vars:
+        file: "group_vars/{{ item }}.yml"
+      loop: "{{ build_groups }}"
+    - name: Wait until SSH login is permitted
+      ansible.builtin.wait_for_connection:
+        delay:   10
+        timeout: 600
+        sleep:   5
+    - name: Gather facts once connection is ready
+      ansible.builtin.setup:
+
+  vars:
+    options: "{{ build_options }}"
+    # YYYYMMDD-HHMMSS, stripping the colons
+    unique_suffix: "{{ ansible_date_time.date }}-{{ ansible_date_time.time | regex_replace(':','') }}"
+    # build a new var; leave your original image_build_name untouched
+    timestamped_image_name: "{{ image_build_name }}-{{ unique_suffix }}"
+
+  tasks:
+    - name: Image build process [ Stage 2 ]
+      block:
+        - name: Build
+          ansible.builtin.import_tasks: hpc_include.yml
+
+        - name: Create image
+          delegate_to: localhost
+          oci_compute_image:
+            config_profile_name: "{{ access_cfg_file_account }}"
+            region:              "{{ region }}"
+            auth_type:           "{{ auth_type }}"
+            display_name:        "{{ timestamped_image_name }}"
+            compartment_id:      "{{ compartment_ocid }}"
+            instance_id:         "{{ hostvars['localhost'].instance.instance.id }}"
+            wait:                yes 
+            wait_timeout:        1200
+            state:               present
+          register: image
+        
+        - name: Persist built image OCID for downstream stages
+          delegate_to: localhost
+          run_once: true
+          copy:
+            dest: /tmp/custom_image_info.txt
+            content: |
+              image_ocid={{ image.image.id }}
+              ssh_user={{ user }}
+
+        - name: Terminate the builder instance
+          delegate_to: localhost
+          run_once: true
+          oci_compute_instance:
+            config_profile_name: "{{ access_cfg_file_account }}"
+            region:              "{{ region }}"
+            auth_type:           "{{ auth_type }}"
+            instance_id:         "{{ hostvars['localhost']['instance'].instance.id }}"
+            state:               absent
+          ignore_errors: true
+          when: hostvars['localhost']['instance'].instance.id is defined
+
+        - name: Delete SSH private key
+          ansible.builtin.file:
+            path:  /tmp/id_ssh_rsa
+            state: absent
+          when: not build_debug
+
+        - name: Delete SSH public key
+          ansible.builtin.file:
+            path:  /tmp/id_ssh_rsa.pub
+            state: absent
+          when: not build_debug
+
+      rescue:
+        - name: Terminate the builder instance (on error)
+          delegate_to: localhost
+          run_once: true
+          oci_compute_instance:
+            config_profile_name: "{{ access_cfg_file_account }}"
+            region:              "{{ region }}"
+            auth_type:           "{{ auth_type }}"
+            instance_id:         "{{ hostvars['localhost']['instance'].instance.id }}"
+            state:               absent
+          ignore_errors: true
+          when: hostvars['localhost']['instance'].instance.id is defined
+
+        - name: Delete SSH private key
+          ansible.builtin.file:
+            path:  /tmp/id_ssh_rsa
+            state: absent
+          when: not build_debug
+
+        - name: Delete SSH public key
+          ansible.builtin.file:
+            path:  /tmp/id_ssh_rsa.pub
+            state: absent
+          when: not build_debug

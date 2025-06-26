@@ -1,0 +1,68 @@
+- name: Install NCCL tuner
+  vars:
+    user: "{{ ansible_user }}"
+
+  block:
+
+    - name: Ensure monitoring directory exists
+      ansible.builtin.file:
+        path: "{{ benchmark_base_path }}/oci-tuner/"
+        state: directory
+        owner: "{{ user }}"
+        group: "{{ user }}"
+        mode: '0775'
+      become: true
+
+    - name: Download libnccl-ocituner.so versions on control
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.get_url:
+        url: "https://objectstorage.eu-frankfurt-1.oraclecloud.com/p/m1Gdcbiguqst6n_aVwRZIFpRZxUG-wGMvqWS5QJeJbIvNZnqTTA3N1_DDRuYpvJx/n/hpc/b/source/o/tuner/libnccl-ocituner.so.{{ item }}_OL"
+        dest: "/tmp/libnccl-ocituner.so.{{ item }}_OL"
+        mode: "0644"
+        validate_certs: no
+      when: ansible_distribution == 'OracleLinux'
+      loop:
+        - "1.0.2"
+        - "2.0.1"
+
+    - name: Copy libnccl-ocituner.so into place on OL
+      become: true
+      ansible.builtin.copy:
+        src: "/tmp/libnccl-ocituner.so.{{ item }}_OL"
+        dest: "{{ benchmark_base_path }}/oci-tuner/libnccl-ocituner-A100.so.{{ item }}"
+        owner: "{{ user }}"
+        group: "{{ user }}"
+        mode: "0775"
+      when: ansible_distribution == 'OracleLinux'
+      loop:
+        - "1.0.2"
+        - "2.0.1"
+
+    - name: Download libnccl-ocituner.so versions for Ubuntu on control
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.get_url:
+        url: "https://objectstorage.eu-frankfurt-1.oraclecloud.com/p/m1Gdcbiguqst6n_aVwRZIFpRZxUG-wGMvqWS5QJeJbIvNZnqTTA3N1_DDRuYpvJx/n/hpc/b/source/o/tuner/libnccl-ocituner.so.{{ item }}_ubuntu_22.04"
+        dest: "/tmp/libnccl-ocituner.so.{{ item }}_ubuntu_22.04"
+        mode: "0644"
+        validate_certs: no
+      loop:
+        - "1.0.2"
+        - "2.0.1"
+
+    - name: Copy libnccl-ocituner.so into place on Ubuntu
+      become: true
+      ansible.builtin.copy:
+        src: "/tmp/libnccl-ocituner.so.{{ item }}_ubuntu_22.04"
+        dest: "{{ benchmark_base_path }}/oci-tuner/libnccl-ocituner-A100.so.{{ item }}"
+        owner: "{{ user }}"
+        group: "{{ user }}"
+        mode: "0775"
+      when:
+        - ansible_os_family == 'Debian'
+        - ansible_distribution_major_version == '22'
+      loop:
+        - "1.0.2"
+        - "2.0.1"
+

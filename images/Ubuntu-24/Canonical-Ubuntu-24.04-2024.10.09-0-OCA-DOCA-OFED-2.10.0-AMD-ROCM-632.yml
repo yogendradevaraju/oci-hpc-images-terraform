@@ -1,0 +1,22 @@
+base_image_name: "Canonical-Ubuntu-24.04-2024.10.09-0"
+groups: 
+  - kernel_parameters
+  - oci_hpc_packages
+  - mofed_doca_2100
+  - hpcx_2212
+  - openmpi_414
+  - amd_rocm_632
+  - oca_150_ubuntu
+build_options: 
+  - noselinux
+  - nomitigations
+  - openmpi
+  - benchmarks
+  - amd
+  - enroot
+  - networkdevicenames
+  - use_plugins
+features: OCA-DOCA-OFED-2.10.0-AMD-ROCM-632
+image_build_name: "{{ base_image_name }}-{{ features }}"
+user: ubuntu
+build_debug: true

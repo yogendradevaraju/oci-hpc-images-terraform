@@ -1,0 +1,23 @@
+base_image_name: "Oracle-Linux-8.10-2025.02.28-0"
+build_groups: 
+  - kernel_parameters
+  - oci_hpc_packages
+  - mofed_2410_1140_el810
+  - hpcx_2212
+  - openmpi_414
+  - amd_rocm_632
+  - ol8_rhck
+build_options: 
+  - noselinux
+  - rhck
+  - openmpi
+  - benchmarks
+  - amd
+  - enroot
+  - networkdevicenames
+  - use_plugins
+features: OCA-RHCK-OFED-24.10-1.1.4.0-AMD-ROCM-632
+image_build_name: "{{ base_image_name }}-{{ features }}"
+user: opc
+build_debug: true
+image_id: "ocid1.image.oc1.abc...."

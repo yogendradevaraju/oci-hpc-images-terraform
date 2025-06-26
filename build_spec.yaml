@@ -1,0 +1,87 @@
+version: 0.1
+component: build
+timeoutInSeconds: 10000
+shell: bash
+failImmediatelyOnError: true
+
+env:
+  vaultVariables:
+    # OCI_API_KEY: "ocid1.vaultsecret.oc1.iad...." 
+
+steps:
+  - type: Command
+    name: "Install Python 3.8"
+    shell: bash
+    timeoutInSeconds: 600
+    failImmediatelyOnError: true
+    command: |
+      yum install -y oracle-softwarecollection-release-el7
+      yum install -y rh-python38 rh-python38-python-pip
+
+  - type: Command
+    name: "Setup Python Virtualenv & Ansible"
+    shell: bash
+    timeoutInSeconds: 600
+    failImmediatelyOnError: true
+    command: |
+      # avoid MANPATH unset error
+      export MANPATH="${MANPATH:-}"
+
+      # enable SCL
+      source /opt/rh/rh-python38/enable
+
+      # create & activate venv
+      python3.8 -m venv ~/ansible-venv
+      source ~/ansible-venv/bin/activate
+
+      pip install --upgrade pip setuptools
+      pip install ansible-core==2.13.13 oci
+
+      ansible --version
+
+  - type: Command
+    name: "Install Ansible Galaxy Collections"
+    shell: bash
+    timeoutInSeconds: 300
+    failImmediatelyOnError: false
+    command: |
+      export MANPATH="${MANPATH:-}"
+      source /opt/rh/rh-python38/enable
+      source ~/ansible-venv/bin/activate
+
+      ansible-galaxy collection install \
+      oracle.oci \
+      community.crypto \
+      community.general \
+      ansible.posix \
+      --ignore-certs --force || true
+
+      ansible-galaxy collection list | grep oracle.oci
+
+  - type: Command
+    name: "Run Image Build Playbook"
+    shell: bash
+    timeoutInSeconds: 15000
+    failImmediatelyOnError: true
+    command: |
+      export MANPATH="${MANPATH:-}"
+      source /opt/rh/rh-python38/enable
+      source ~/ansible-venv/bin/activate
+
+      ansible-playbook ./ansible/builder.yml \
+        -e "image_build_file=vars/my-custom-image.yml" 
+
+      # bring the file into the workspace
+      cp /tmp/custom_image_info.txt .
+
+      # load the variables it defines
+      source custom_image_info.txt
+
+      # Emit both variables for downstream stages
+      echo "CUSTOM_IMAGE_OCID=$image_ocid" > custom_env.env
+      echo "SSH_USER=$ssh_user"        >> custom_env.env
+
+outputArtifacts:
+  - name: build-output
+    type: BINARY
+    location: custom_env.env

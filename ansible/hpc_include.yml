@@ -1,0 +1,156 @@
+# options:
+#   rhck        - Install RedHat Compatible Kernel on Oracle Linux
+#   upgrade     - Upgrade all packages to the latest version
+#   nomitigations - Disable all security mitigations
+#   noselinux   - Disable SELinux
+#   nvidia      - Install NVIDIA GPU drivers and software
+#   monitoring  - Install NVIDIA DCGM
+#   benchmarks  - Install benchmarks
+#   intel-oneapi - Install Intel OneAPI MPI/MKL
+#   openmpi     - Install OpenMPI against system gcc
+#   use_plugins - Do not install OCI HPC packages replaced by OCA HPC Plugins
+#   skip_tests  - Skip long-running AMD RCCL compile and tests entirely
+#   fast_tests  - Run only core/fast RCCL unit tests to reduce test duration
+
+# groups:
+#   Defines which group_vars files to load per group
+
+- debug:
+    msg: "Options: {{ options }}"
+  when: options is defined
+
+- debug:
+    msg: "Features: {{ features }}"
+  when: features is defined
+
+- block:
+    # Core OS and kernel prep
+    - ansible.builtin.import_role:
+        name: resize_rootfs
+    - ansible.builtin.import_role:
+        name: oracle_cloud_agent_update_disable
+    - ansible.builtin.import_role:
+        name: rdma_configuration
+    - ansible.builtin.import_role:
+        name: ssh
+    - ansible.builtin.import_role:
+        name: packages
+    - ansible.builtin.import_role:
+        name: kernel
+    - ansible.builtin.import_role:
+        name: kernel_parameters
+    - ansible.builtin.import_role:
+        name: kernel_limits
+    - ansible.builtin.import_role:
+        name: oci_utils
+    - ansible.builtin.import_role:
+        name: nozeroconf
+    - ansible.builtin.import_role:
+        name: disable_selinux
+  rescue:
+    - name: Report core prep failure
+      ansible.builtin.debug:
+        msg: "Core OS prep roles failed, aborting HPC include."
+      failed_when: true
+
+- name: Install Mellanox OFED (with SSH-drop recovery)
+  block:
+    - name: Run OFED installer
+      ansible.builtin.import_role:
+        name: mellanox_ofed
+
+  rescue:
+    - name: Debug OFED install likely reset network, entering recovery
+      ansible.builtin.debug:
+        msg: "OFED install caused SSH to drop, waiting to reconnect..."
+
+    - name: SSH went away—wait for it
+      ansible.builtin.wait_for_connection:
+        delay:   10
+        timeout: 600
+        sleep:   5
+      become: true
+
+    - name: Retry OFED installer
+      ansible.builtin.import_role:
+        name: mellanox_ofed
+
+- block:
+    # HPC-X and GPU software/tests
+    - ansible.builtin.import_role:
+        name: mellanox_hpcx
+    - ansible.builtin.import_role:
+        name: oci_hpc_packages
+    # Install AMD ROCm stack before running RCCL tests
+    - ansible.builtin.import_role:
+        name: amd_rocm
+      when: '"amd" in options'  
+    - ansible.builtin.import_role:
+        name: tuned
+      when: '"noselinux" in options'
+    - ansible.builtin.import_role:
+        name: openmpi_gcc
+      when: '"openmpi" in options'
+    - ansible.builtin.import_role:
+        name: mpivars
+    - ansible.builtin.import_role:
+        name: systemd
+
+    # AMD ROCm and RCCL tests with optimizations
+    - name: Run AMD RCCL tests (skip or fast mode available)
+      ansible.builtin.import_role:
+        name: amd_rccl_tests
+      vars:
+        rccl_parallel_jobs: "{{ ansible_processor_vcpus | default(64) }}"
+        rccl_test_scope: "{{ 'fast' if 'fast_tests' in options else 'full' }}"
+      when: '"amd" in options'
+
+    # NVIDIA software stack
+    - ansible.builtin.import_role:
+        name: nvidia_driver
+      when: '"nvidia" in options'
+    - ansible.builtin.import_role:
+        name: nvidia_cuda
+      when: '"nvidia" in options'
+    - ansible.builtin.import_role:
+        name: nvidia_cudnn
+      when: '"nvidia" in options'
+    - ansible.builtin.import_role:
+        name: nvidia_nccl
+      when: '"nvidia" in options'
+    - ansible.builtin.import_role:
+        name: nvidia_dcgm
+      when: '"nvidia" in options and "monitoring" in options'
+    - ansible.builtin.import_role:
+        name: nccl_tuner
+      when: '"nvidia" in options'
+
+    # Common GPU tuning and benchmarks
+    - ansible.builtin.import_role:
+        name: gpu_tuning
+      when: '"nvidia" in options or "amd" in options'
+    - ansible.builtin.import_role:
+        name: hpc_benchmarks
+      when: '"benchmarks" in options'
+
+    # Finalize
+    - ansible.builtin.import_role:
+        name: dracut
+    - ansible.builtin.import_role:
+        name: oracle_cloud_agent_enable
+    - ansible.builtin.import_role:
+        name: cleanup
+  rescue:
+    - name: Show last 50 lines of RCCL build log
+      ansible.builtin.shell: tail -n 50 /var/log/rccl_build.log
+      register: rccl_excerpt
+      become: true 
+      ignore_errors: true
+
+    - name: Debug RCCL failure excerpt
+      ansible.builtin.debug:
+        var: rccl_excerpt.stdout_lines
+
+    - name: HPC-X/GPU block failed, aborting
+      ansible.builtin.fail:
+        msg: "HPC-X/GPU block failed; see log excerpt above"
