@@ -24,7 +24,8 @@ ansible-playbook ./ansible/builder.yml -e "image_build_file=vars/my-custom-image
 
 ### 4. Commit and Push Your Changes
 
-Add, commit, and push your changes to the master branch.
+- Add, commit, and push your changes to the `master` branch of your repository.
+**Note:** Ensure you are pushing to the correct remote repository, i.e., your personal/private GitHub repository.
 
 ### 5. Trigger the OCI DevOps Pipeline
 
