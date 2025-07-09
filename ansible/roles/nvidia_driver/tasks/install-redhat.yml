@@ -78,6 +78,50 @@
   environment: "{{ proxy_env if proxy_env is defined else {} }}"
   when: ansible_distribution_major_version < '8' and ansible_distribution == 'OracleLinux'
 
+- name: Detect RHCK kernel version (if 'rhck' in options)
+  ansible.builtin.shell: |
+    rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | grep -v uek | sort -V | tail -n1
+  register: rhck_kernel_version
+  changed_when: false
+  when: "'rhck' in options"
+
+- name: Set kernel_version fact to RHCK
+  ansible.builtin.set_fact:
+    kernel_version: "{{ rhck_kernel_version.stdout }}"
+  when: "'rhck' in options"
+
+- name: Detect UEK kernel version (if 'rhck' not in options)
+  ansible.builtin.shell: |
+    rpm -q kernel-uek --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort -V | tail -n1
+  register: uek_kernel_version
+  changed_when: false
+  when: "'rhck' not in options"
+
+- name: Set kernel_version fact to UEK
+  ansible.builtin.set_fact:
+    kernel_version: "{{ uek_kernel_version.stdout }}"
+  when: "'rhck' not in options"
+
+- name: Install RHCK kernel packages
+  ansible.builtin.yum:
+    name:
+      - "kernel-devel-{{ kernel_version }}"
+      - "kernel-headers-{{ kernel_version }}"
+      - "kernel-modules-extra"
+    state: present
+    allow_downgrade: true
+  when: "'rhck' in options"
+
+- name: Install UEK kernel packages
+  ansible.builtin.yum:
+    name:
+      - "kernel-uek-devel-{{ kernel_version }}"
+      - "kernel-uek-headers-{{ kernel_version }}"
+      - "kernel-uek-modules-extra"
+    state: present
+    allow_downgrade: true
+  when: "'rhck' not in options"  
+
 - name: Install driver packages RHEL/CentOS 8 and newer
   ansible.builtin.yum:
     name:

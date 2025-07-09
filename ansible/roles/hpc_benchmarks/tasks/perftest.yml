@@ -44,11 +44,19 @@
       args:
         chdir: "{{ benchmark_base_path }}/perftest"
 
-    - name: Configure IB perftest for GPUDirect # noqa no-changed-when
-      ansible.builtin.command: ./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h
+    - name: Configure IB perftest for GPUDirect with logging
+      ansible.builtin.shell: "./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h | tee configure.log"
       args:
         chdir: "{{ benchmark_base_path }}/perftest"
+      register: perftest_configure_output
+      failed_when: perftest_configure_output.rc != 0
+      changed_when: true
 
-    - name: Build IB perftest
-      community.general.make:
+    - name: Build IB perftest with libstdc++ and CUDA runtime linkage
+      ansible.builtin.shell: |
+        make LDFLAGS="-L/usr/local/cuda/lib64 -lcudart -lstdc++"
+      args:
         chdir: "{{ benchmark_base_path }}/perftest"
+      register: perftest_build_output
+      failed_when: perftest_build_output.rc != 0
+      changed_when: true
