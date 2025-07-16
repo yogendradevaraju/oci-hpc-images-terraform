@@ -141,6 +141,20 @@
     - ansible.builtin.import_role:
         name: cleanup
   rescue:
+    - name: Print kernel version before DKMS failure
+      ansible.builtin.debug:
+        msg: "DKMS failed for kernel version: {{ kernel_version }}"
+
+    - name: Show full NVIDIA DKMS build failure log
+      ansible.builtin.shell: cat /var/lib/dkms/nvidia/{{ nvidia_driver_version }}/build/make.log || true
+      register: dkms_full_failure_log
+      ignore_errors: true
+
+    - name: Print full NVIDIA DKMS build failure log
+      ansible.builtin.debug:
+        var: dkms_full_failure_log.stdout_lines
+      when: dkms_full_failure_log is defined
+      
     - name: Show last 50 lines of RCCL build log
       ansible.builtin.shell: tail -n 50 /var/log/rccl_build.log
       register: rccl_excerpt

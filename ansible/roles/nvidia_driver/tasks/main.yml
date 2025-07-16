@@ -88,14 +88,20 @@
       ansible.builtin.debug:
         msg: "module name is {{ dkms_module_name.stdout }}, status is {{ dkms_module_state.stdout }}"
 
-    - name: Get default kernel name # noqa no-changed-when command-instead-of-shell
-      ansible.builtin.shell: "grubby --default-kernel"
-      register: default_kernel_path
+    - name: Print kernel versions
+      ansible.builtin.shell: |
+        uname -r
+        rpm -q kernel-devel kernel-headers
+      register: kernel_version_check
+      changed_when: false
 
-    - name: Set kernel version
-      ansible.builtin.set_fact:
-        kernel_version: "{{ default_kernel_path.stdout | regex_search('/boot/vmlinuz-(.*)$', '\\1') | first }}"
+    - name: Debug kernel versions
+      ansible.builtin.debug:
+        var: kernel_version_check.stdout_lines
 
-    - name: Run DKMS install # noqa no-changed-when command-instead-of-shell
+    - name: Run DKMS install and capture result # noqa no-changed-when command-instead-of-shell
       ansible.builtin.shell: "dkms install {{ dkms_module_name.stdout }} --force -k {{ kernel_version }}"
+      register: dkms_install_result
+      failed_when: false
+      changed_when: dkms_install_result.rc == 0
       when: dkms_module_state.stdout is defined and dkms_module_state.stdout.find('installed') == -1

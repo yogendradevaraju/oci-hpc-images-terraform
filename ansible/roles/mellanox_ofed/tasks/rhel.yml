@@ -167,6 +167,15 @@
       when:
         - "'rhck' not in options"
 
+    - name: Ensure kernel-modules-extra is installed (required by MLNX OFED)
+      ansible.builtin.yum:
+        name: kernel-modules-extra
+        state: present
+      register: kernel_modules_extra_result
+      retries: 3
+      delay: 10
+      until: kernel_modules_extra_result is succeeded
+
     - name: Ensure dkms is installed
       ansible.builtin.yum:
         enablerepo: "*developer_EPEL*"
